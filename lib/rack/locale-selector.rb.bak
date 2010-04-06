@@ -1,0 +1,42 @@
+require 'rack'
+
+# = HTTP Locale selection For Rack
+#
+# Rack::Cache is suitable as a quick, drop-in component to enable HTTP caching
+# for Rack-enabled applications that produce freshness (+Expires+, +Cache-Control+)
+# and/or validation (+Last-Modified+, +ETag+) information.
+#
+# * Standards-based (RFC 2616 compliance)
+# * Freshness/expiration based caching and validation
+# * Supports HTTP Vary
+# * Portable: 100% Ruby / works with any Rack-enabled framework
+# * Disk, memcached, and heap memory storage backends
+#
+# === Usage
+#
+# Create with default options:
+#   require 'rack/cache'
+#   Rack::LocaleSelector.new(app, :verbose => true, :blacklist => %w('tunnel', 'assets'))
+#
+# Within a rackup file (or with Rack::Builder):
+#   require 'rack/cache'
+#   use Rack::LocaleSelector do
+#     set :verbose, true
+#     set :whitelist => I18n.available_locales,
+#     set :blacklist => ['tunnel', 'assets']
+#   end
+#   run app
+module Rack::LocaleSelector
+  autoload :Options, 'rack/locale-selector/options'
+  autoload :Context, 'rack/locale-selector/context'
+  
+  # Create a new Rack::LocaleSelector middleware component that fetches resources from
+  # the specified backend application. The +options+ Hash can be used to
+  # specify default configuration values (see attributes defined in
+  # Rack::LocaleSelector::Options for possible key/values). When a block is given, it
+  # is executed within the context of the newly create Rack::LocaleSelector::Context
+  # object.
+  def self.new(backend, options={}, &b)
+    Context.new(backend, options, &b)
+  end
+end
