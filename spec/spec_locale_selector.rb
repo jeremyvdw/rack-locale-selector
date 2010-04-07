@@ -1,95 +1,66 @@
+
 require 'test/spec'
-require 'rack/mock'
+require 'rack/test'
 require 'rack/locale_selector'
 
-def mock_env(http_host, path = '/', cookie = '', http_accept_language = 'fr,en-EN;q=0.8')
-  opts = {'HTTP_HOST' => http_host}
-  opts.merge!({'HTTP_COOKIE' => cookie}) if cookie
-  opts.merge!({'HTTP_ACCEPT_LANGUAGE' => http_accept_language}) if http_accept_language
-  Rack::MockRequest.env_for(path, opts)
+def mock_env(http_host, cookie = '', http_accept_locale = 'fr,en-EN;q=0.8')
+  Rack::MockRequest.env_for(http_host, 'HTTP_COOKIE' => cookie, 'HTTP_ACCEPT_LANGUAGE' => http_accept_locale)
 end
 
-def middleware(options = {})
-  Rack::LocaleSelector.new(@app, options)
+def request(options = {})
+  Rack::MockRequest.new(Rack::LocaleSelector.new(@app, options))
 end
 
 describe "Rack::LocaleSelector" do
-
+  
   before do
-    @app = lambda { |env| [200, { 'Content-Type' => 'text/plain' }, 'hello'] }
+    @app = lambda { |env| [200, { }, 'hello'] }
   end
   
-  context "Root domain host without cookie does redirect" do
+  context "request to root domain host" do
     before do
-      @app = middleware
+      I18n.default_locale = :en
     end
     
-    it "should follow HTTP_ACCEPT_LANGUAGE headers" do
-      status, headers, body = @app.call(mock_env("example.com"))
-      status.should.equal 403
-      I18n.locale.should.equal 'fr'
-      headers["Set-Cookie"].should.equal "language=fr"
-      headers["Location"].should.equal "fr.example.com"
+    it "should be redirected following cookie's value" do
+      response = request.get 'http://example.com/', 'HTTP_COOKIE' => 'locale=fr'
+      response.status.should.equal 301
+      response.headers['Location'].should.equal 'http://fr.example.com/'
     end
     
-    it "should follow default locale if no HTTP_ACCEPT_LANGUAGE headers" do
-      status, headers, body = @app.call(mock_env('example.com', '/', '', false))
-      status.should.equal 403
-      I18n.locale.should.equal 'en'
-      headers["Set-Cookie"].should.equal "language=en"
-      headers["Location"].should.equal "en.example.com"
+    it "should be redirected following HTTP_ACCEPT_LANGUAGE headers" do
+      response = request.get 'http://example.com/', 'HTTP_ACCEPT_LANGUAGE' => 'fr,en-EN;q=0.8'
+      response.status.should.equal 301
+      response.headers['Location'].should.equal 'http://fr.example.com/'
+    end
+    
+    it "should be redirected using default locale if there's no HTTP_ACCEPT_LANGUAGE headers set" do
+      response = request.get 'http://example.com/'
+      response.status.should.equal 301
+      response.headers['Location'].should.equal 'http://en.example.com/'
     end
   end
   
-  context "Root domain host with cookie" do
-    specify "redirect should follow cookie's value" do
-      app = middleware
-      status, headers, body = @app.call(mock_env("example.com", '/', 'language=fr'))
-      status.should.equal 403
-      I18n.locale.should.equal 'fr'
-      headers["Set-Cookie"].should.equal "language=fr"
-      headers["Location"].should.equal "fr.example.com"
+  context "request to domain host with locale set as subdomain" do
+    it "should respond with spanish website" do
+      response = request.get 'http://es.example.com/'
+      response.status.should.equal 200
+      response.headers['Set-Cookie'].should.equal "locale=es; domain=.example.com; path=/"
+      I18n.locale.should.equal :es
     end
     
-    specify "should be redirected to spanish website" do
-      app = middleware
-      status, headers, body = @app.call(mock_env("example.com", '/', 'language=es'))
-      status.should.equal 403
-      I18n.locale.should.equal 'es'
-      headers["Set-Cookie"].should.equal ""
-      headers["Location"].should.equal "es.example.com"
+    it "should override cookie's value, set a new cookie and respond with spanish website" do
+      response = request.get 'http://es.example.com/', 'HTTP_COOKIE' => 'locale=fr'
+      response.status.should.equal 200
+      response.headers["Set-Cookie"].should.equal "locale=es; domain=.example.com; path=/"
+      I18n.locale.should.equal :es
+    end
+    
+    it "should respond with spanish website" do
+      response = request.get 'http://es.example.com/', 'HTTP_COOKIE' => 'locale=es'
+      response.status.should.equal 200
+      response.headers["Set-Cookie"].should.equal nil
+      I18n.locale.should.equal :es
     end
   end
-  
-  context "Home page with cookie" do
-    specify "should be redirected to french website with french locale (when cookie)" do
-      app = middleware
-      status, headers, body = @app.call(mock_env('www.example.com', '/', 'language=fr'))
-      status.should.equal 403
-      I18n.locale.should.equal 'fr'
-      headers["Set-Cookie"].should.equal ""
-      headers["Location"].should.equal "fr.example.com"
-    end
-  end
-  
-  context "Locale page without cookie" do
-    specify "should display the french website with french locale and set a cookie" do
-      app = middleware
-      status, headers, body = @app.call(mock_env('fr.example.com'))
-      status.should.equal 200
-      I18n.locale.should.equal 'fr'
-      headers["Set-Cookie"].should.equal "language=fr"
-    end
-  end
-
-  context "Locale page with cookie" do
-    specify "should display the french website with french locale" do
-      app = middleware
-      status, headers, body = @app.call(mock_env('fr.example.com', '/', 'language=fr'))
-      status.should.equal 200
-      I18n.locale.should.equal 'fr'
-      headers["Set-Cookie"].should.equal ''
-    end
-  end
-
 end

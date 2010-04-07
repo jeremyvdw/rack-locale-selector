@@ -4,126 +4,115 @@ require 'i18n'
 module Rack
   class LocaleSelector
     
-    attr_reader :options
-    
     def initialize(app, options={})
-      @app = app
-      @options = {
-        :use_domain => true
+      @app, @options = app, {
+        :use_subdomain => true,
+        :default_subdomain => "www",
+        :default_locale => :en
       }.merge(options)
       yield self if block_given?
     end
-
+    
     def call(env)
-      env = env
-      request = Rack::Request.new(env)
-
-      # get subdomain and domain
-      # subdomain, domain = split_domain(host)
-      # We need to set cookies domain to ".example.com" (see http://codetunes.com/2009/04/17/dynamic-cookie-domains-with-racks-middleware/)
-      host = @env['HTTP_HOST'].split(':').first if @env.has_key?('HTTP_HOST')
-      @env['rack.session.options'][:domain] = custom_domain?(host) ? ".#{host}" : @options[:default_domain]
+      @env = env
+      @request = Rack::Request.new(@env)
       
-      if deflect?(request)
-        dispatch
+      set_session_options!
+      
+      if @request.post? || @request.put? || @request.delete? 
+        @app.call(env)
+      elsif deflect?
+        redirect!(get_locale)
       else
-        @app.call(@env)
+        response = Rack::Response.new(@app.call(env))
+        response.set_cookie('locale', {
+          :value => I18n.locale, 
+          :path => '/', 
+          :domain => @env["rack.session.options"][:domain]}) if get_cookie_locale != I18n.locale.to_s
+        response.finish
+      end if @request.get?
+    end
+    
+    private
+    
+    # We need to set cookies domain to ".example.com" when using subdomains
+    # check http://codetunes.com/2009/04/17/dynamic-cookie-domains-with-racks-middleware/
+    def set_session_options!
+      @env['rack.session.options'] = {} unless @env['rack.session.options']
+      @env['rack.session.options'][:domain] = if @options[:use_subdomain]
+        @options[:default_domain] ? @options[:default_domain] : unlocalized_host
+      else
+        @request.host
       end
     end
-
+    
     def custom_domain?(host)
-      domain = @default_domain.sub(/^\./, '')
+      domain = host.sub(/^\./, '')
       host !~ Regexp.new("#{domain}$", Regexp::IGNORECASE)
     end
-
-    def deflect?(request)
-      subdomain = parse_host(request.host)
-      return !@option[:blacklist].include?(subdomain) unless @option[:blacklist].empty?
-      return !@option[:whitelist].include?(subdomain) unless @option[:whitelist].empty?
+    
+    def deflect?
+      locale = get_locale_from_request
+      return !@options[:blacklist].include?(locale) unless !@options[:blacklist] or @options[:blacklist].empty?
+      return !@options[:whitelist].include?(locale) unless !@options[:blacklist] or @options[:whitelist].empty?
+      !set_locale(locale)
     end
-
-    # Return HTTP_HOST subdomain (ie fr.example.com => fr)
-    def parse_host(host)
-      return host.match(/^[a-z0-9]{2}(?=\.)/)[0] if @options[:use_domain]
+    
+    # Return SERVER_NAME subdomain (ie fr.example.com => fr)
+    def get_locale_from_request
+      if @options[:use_subdomain]
+        host = @request.host.split(':').first if @env.has_key?('SERVER_NAME')
+        return host.scan(/^(\w{2})(?=\.)/).flatten[0]
+      end
+      @env['PATH'].scan(/^\/(\w{2})\//).flatten[0] # exemple.com/fr => fr
     end
-
-    def get_browser_language
+    
+    def unlocalized_host
+      host = @request.host.gsub(/^(\w{2})(?=\.)/, '')
+      host.scan(/^\./) ? host : ".#{host}"
+    end
+    
+    def get_locale
+      get_cookie_locale || get_browser_locale || get_default_locale
+    end
+    
+    def get_cookie_locale
+      @request.cookies['locale']
+    end
+    
+    def get_browser_locale
       # http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.4
-      if lang = @env["HTTP_ACCEPT_LANGUAGE"]
+      if lang = @env['HTTP_ACCEPT_LANGUAGE']
         lang = lang.split(",").map { |l|
           l += ';q=1.0' unless l =~ /;q=\d+\.\d+$/
           l.split(';q=')
         }.first
-        locale = options['rack.locale'] = lang.first.split("-").first
+        locale = @env['rack.locale'] = lang.first.split("-").first
       else
-        locale = options['rack.locale'] = I18n.default_locale
+        locale = @env['rack.locale'] = I18n.default_locale
       end
       locale
     end
-
-    # def dispatch
-    #   host = env.has_key?("HTTP_HOST") ? env["HTTP_HOST"].split(':').first : @default_domain
-    #   @env["rack.session.options"][:domain] = custom_domain?(host) ? ".#{host}" : "#{@default_domain}" unless Rails.env == 'test'
-    # 
-    #   status, headers, body = builder.call(@env)
-    #   @response = Rack::Response.new(body, status, headers)
-    # 
-    #   if @response.redirect? && options["rack-bug.intercept_redirects"]
-    #     intercept_redirect
-    #   elsif modify?
-    #     inject_toolbar
-    #   end
-    # 
-    #   return @response.to_a
-    # end
-
-    def dispatch
-      # Coming from http://www.smartdate.com or http://whatever.smartdate.com
-      if @subdomain == "www" or !locale_exist?(domain_locale)
-        # Find the best locale
-        I18n.locale = locale = env['rack.locale'] = if locale_exist?(@cookies["language"])
-          @cookies["language"]
-        elsif locale_exist?(get_language_from_browser(env).to_s.downcase)
-          get_language_from_browser(env).to_s.downcase
+    
+    def redirect!(locale)
+      location = if @options[:use_subdomain]
+        if @request.url.scan(/^(\w{2})(?=\.)/)
+          @env["HTTP_HOST"] = @env["SERVER_NAME"] = "#{locale}.#{@request.host}"
+          @request.url
         else
-          I18n.default_locale
+          @request.url.gsub(/^(\w{2})(?=\.)/, locale)
         end
-        # puts "middleware: locale set to '#{locale}'\n" unless Rails.env == 'production'
-
-        # If locale is english: continue
-        # If the referer pointing to us we should change the language to english
-        default_locale_str = I18n.default_locale.to_s
-        if (locale == default_locale_str) or (locale != default_locale_str and env.has_key?("HTTP_REFERER") and env["HTTP_REFERER"].include?(env["HTTP_HOST"].sub(/www\./, '')))
-          I18n.locale = locale = env['rack.locale'] = default_locale_str
-          status, headers, body = @app.call(env)
-          response = Rack::Response.new(body, status, headers)
-          response.set_cookie("language", {:value => locale, :path => '/', :domain => @env["rack.session.options"][:domain]}) unless @cookies["language"] == default_locale_str
-          # Fixes issue http://github.com/chneukirchen/rack/issues/#issue/3/comment/150615
-          response.headers["Set-Cookie"].delete_if {|x| x.empty?} if response.headers["Set-Cookie"].is_a? Array
-          return response.finish
-        end
-
-        # We redirect to the proper subdomain
-        response = Rack::Response.new("Redirecting you to the #{locale} website.", 302, {"Location" => localized_url(env)})
-        response.set_cookie("language", {:value => locale, :path => '/', :domain => @env["rack.session.options"][:domain]})
-        return response.finish
+      else
+        # TODO: find better regexp to match http://whatever.example.com/[EN]
+        @request.url.gsub(/^\/(\w{2})\//, locale)
       end
-
-      # Coming from http://<domain_locale>.smartdate.com
-      I18n.locale = locale = env['rack.locale'] = @subdomain
-      status, headers, body = @app.call(env)
-      response = Rack::Response.new(body, status, headers)
-      response.set_cookie("language", {:value => @subdomain, :path => '/', :domain => @env["rack.session.options"][:domain]}) if domain_locale != @cookies["language"]
-      return response.finish
-    end
-
-    def log(message)
-      return unless options[:log]
-      options[:log].puts(options[:log_format] % [Time.now.strftime(options[:log_date_format]), message])
+      [301, {'Location' => location}, ''] 
     end
     
     def set_locale(locale)
-      I18n.locale = env['rack.locale'] = locale.to_sym
+      return false unless locale
+      I18n.locale = @env['rack.locale'] = locale.to_sym
     end
+    
   end
 end

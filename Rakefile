@@ -1,4 +1,5 @@
-require 'rake/clean'
+require 'rake/rdoctask'
+require 'rake/testtask'
 
 task :default => :test
 
@@ -9,10 +10,9 @@ task :spec do
   sh 'specrb --specdox -Ilib:spec spec/spec_*.rb'
 end
 
-desc 'Run specs with unit test style output'
-task :test => FileList['spec/spec_*.rb'] do |t|
-  suite = t.prerequisites
-  sh "specrb -Ilib:spec #{suite.join(' ')}", :verbose => false
+desc "Run spec"
+task :test do
+  sh "specrb -Ilib:spec -w #{ENV['TEST'] || '-a'} #{ENV['TESTOPTS']}"
 end
 
 desc 'Generate test coverage report'

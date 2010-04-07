@@ -1,0 +1,32 @@
+Rack::LocaleSelector is designed to provided locale detection settings through the middleware stack with I18n.
+
+The behaviour is quite similar to google's locale settings:
+It tries first to fetch locale value from URI, cookie, HTTP_LANGUAGE_HEADERS or fallback to I18n default's value. 
+
+Rack::LocaleSelector sets the I18n.locale to the matching value or redirects the user to the proper locale in URI, here is how redirection work:
+  
+  http://example.com (with cookie set to :fr) => http://fr.example.com
+  http://example.com (with HTTP_ACCEPT_HEADERS set to :fr) => http://fr.example.com
+
+  tricky ones:
+  http://es.example.com (with cookie set to :fr) => http://es.example.com (sets a cookie to :es)
+  
+You can choose to not use locale as subdomain but as a value in URI (http://example.com/fr) by setting :use_subdomain to false
+
+Usage:
+
+ script/plugin install git://github.com/jeremyvdw/rack-locale-selector.git 
+
+ # config/environments/development.rb
+ config.middleware.use "Rack::LocaleSelector"
+
+ Options:
+  :use_subdomain
+  :default_domain
+  :white_list # Buggy
+  :black_list # Buggy
+
+Thanks to:
+
+ Rack::Bug
+ Rack::Cache
